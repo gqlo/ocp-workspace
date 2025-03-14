@@ -8,7 +8,12 @@ This script allows you to create a Docker container with specific kernel version
   - Podman installed (`dnf install podman` if not already installed)
   - Valid Red Hat subscription activated
   - `subscription-manager` properly authenticated
-  - Git installed
+  - Red Hat Subscription: The build process requires a valid Red Hat subscription since it needs to access RHEL repositories.
+  - Subscription Mount: The script mounts the following directories from your host:
+  - `/etc/pki/entitlement`
+  - `/etc/rhsm`
+  - `/etc/yum.repos.d/redhat.repo`
+
 
 ## Installation
 
@@ -30,14 +35,6 @@ The script will automatically:
 ### Basic Usage
 
 ```bash
-./generate-dockerfile.sh -k 5.14.0-427.40.1.el9_4.x86_64
+./build-ebpf.sh -k 5.14.0-427.40.1.el9_4.x86_64
 ```
-
-## Requirements
-
-- Red Hat Subscription: The build process requires a valid Red Hat subscription since it needs to access RHEL repositories.
-- Subscription Mount: The script mounts the following directories from your host:
-  - `/etc/pki/entitlement`
-  - `/etc/rhsm`
-  - `/etc/yum.repos.d/redhat.repo`
 
