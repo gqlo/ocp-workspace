@@ -18,7 +18,7 @@ random_range() {
 NUM_CYCLES=10000          # Number of cycles to run
 BURST_MIN=5               # Minimum burst duration in seconds
 BURST_MAX=600             # Maximum burst duration in seconds
-ACTIVE_PROBABILITY=70     # Probability (%) that a VM will be active in a cycle
+ACTIVE_PROBABILITY=50     # Probability (%) that a VM will be active in a cycle
 CPU_LOAD_MIN=50           # Minimum CPU load percentage
 CPU_LOAD_MAX=100          # Maximum CPU load percentage
 CPU_CORES=$(nproc)        # Number of CPU cores to use
@@ -47,16 +47,14 @@ for ((cycle=1; cycle<=NUM_CYCLES; cycle++)); do
     
     # Determine if VM will be active this cycle (random probability)
     active_roll=$(random_range 1 100)
-    if [ $active_roll -le $ACTIVE_PROBABILITY ]; then
+    if [ "$active_roll" -le "$ACTIVE_PROBABILITY" ]; then
         # VM is active - run stress
         echo "Cycle $cycle/$NUM_CYCLES: ACTIVE - Running stress test for $duration seconds..."
         echo "  - CPU: $cpu_load%"
         echo "  - Memory: $MEM_TO_USE MB (aggressive, vm-keep)"
         
-        # Run stress-ng with CPU and memory load including vm-keep and aggressive options
-        stress-ng --cpu $CPU_CORES --cpu-load $cpu_load \
-                  --vm $MEM_WORKERS --vm-bytes ${MEM_TO_USE}M --vm-keep --aggressive \
-                  --timeout ${duration}s > /dev/null 2>&1
+        #Run stress-ng with CPU and memory load including vm-keep and aggressive options
+        stress-ng --cpu $CPU_CORES --cpu-load $cpu_load --vm $MEM_WORKERS --vm-bytes ${MEM_TO_USE}M --vm-keep --aggressive --timeout ${duration}s > /dev/null 2>&1
     else
         # VM is inactive - just idle for the duration
         echo "Cycle $cycle/$NUM_CYCLES: IDLE - Sleeping for $duration seconds..."
