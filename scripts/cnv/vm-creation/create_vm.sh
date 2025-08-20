@@ -73,11 +73,21 @@ get_timestamp() {
 # Function to log with timestamp
 log_message() {
     local message="$1"
-    echo "$(get_timestamp) $message"
+    local timestamped_message="$(get_timestamp) $message"
+    echo "$timestamped_message"
+    echo "$timestamped_message" >> "$LOG_FILE"
 }
 
 # Setup logging
-LOG_FILE="$(date +%Y%m%d).log"
+LOG_DIR="logs"
+LOG_FILE="${LOG_DIR}/$(date +%Y%m%d).log"
+
+# Create log directory if it doesn't exist
+if [ ! -d "$LOG_DIR" ]; then
+    mkdir -p "$LOG_DIR"
+    echo "Created log directory: $LOG_DIR"
+fi
+
 log_message "Log file created: $LOG_FILE"
 
 # Function to create namespaces
