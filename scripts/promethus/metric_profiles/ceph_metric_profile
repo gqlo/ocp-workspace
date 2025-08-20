@@ -1,0 +1,10 @@
+# the following metrics must follow the yaml format
+
+max_osd_cpu_usage:
+   max(rate(container_cpu_usage_seconds_total{namespace=~"openshift-storage",container!="POD",name!="", container=~"osd"}[1m]))
+
+max_osd_mem_usage:
+   max(container_memory_rss{namespace=~"openshift-storage", container!="POD",container!="", container=~"osd"})/1073741824 
+
+max_traffic_usage:
+   max(rate(node_network_receive_bytes_total{instance!~"master.*", device=~"(eth|en).*"}[1m]) + rate(node_network_transmit_bytes_total{instance!~"master.*", device=~"(eth|en).*"}[1m])) * 8 / 1073741824

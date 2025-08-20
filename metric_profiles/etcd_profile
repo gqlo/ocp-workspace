@@ -1,6 +1,0 @@
-etcd_disk_wal_fsync:
-    - histogram_quantile(0.99, sum(irate(etcd_disk_wal_fsync_duration_seconds_bucket{$filter}[2m])) by (namespace, pod, le))
-etcd_disk_backend_commit:
-    - histogram_quantile(0.99, sum(irate(etcd_disk_backend_commit_duration_seconds_bucket{$filter}[2m])) by (namespace, pod, le))
-etcd_network_peer_RTT:
-    - histogram_quantile(0.99, sum(irate(etcd_network_peer_round_trip_time_seconds_bucket{$filter}[2m])) by (namespace, pod, le))

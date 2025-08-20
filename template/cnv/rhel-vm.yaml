@@ -1,23 +1,9 @@
 apiVersion: kubevirt.io/v1
 kind: VirtualMachine
 metadata:
-  name: rhel9-placeholder
+  name: rhel9-base
 spec:
-  dataVolumeTemplates:
-  - apiVersion: cdi.kubevirt.io/v1beta1
-    kind: DataVolume
-    metadata:
-      name: rhel9-grandparent
-    spec:
-      pvc:
-        accessModes:
-        - ReadWriteMany
-        resources:
-          requests:
-            storage: 21Gi
-        volumeMode: Block
-        storageClassName: ocs-storagecluster-ceph-rbd-virtualization
-  running: false
+  running: true
   template:
     metadata:
       labels:
@@ -55,5 +41,5 @@ spec:
         pod: {}
       volumes:
       - dataVolume:
-          name: rhel9-grandparent 
+          name: rhel9-base 
         name: vda

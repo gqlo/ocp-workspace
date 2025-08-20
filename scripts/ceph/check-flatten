@@ -1,0 +1,1 @@
+ ocs-storagecluster-cephblockpool); do if ! rbd info ocs-storagecluster-cephblockpool/$vol | grep -q "parent"; then echo $vol ;fi; done

@@ -1,3 +1,0 @@
-# list of OCP operator environment varaibles
-METALLB_IP_RANGE=192.168.216.32-192.168.216.122
-

@@ -1,9 +1,0 @@
-name=kv-w9-lvm-128g-32vcpu-1
-pull-secret=/root/hypershift/config/pull-secret
-node-pool-replicas=9
-control-plane-availability-policy=HighlyAvailable
-node-selector=kubernetes.io/infra-virtualization=virt-components
-etcd-storage-class=lvms-vg-nvme
-memory=128Gi
-cores=32
-release-image=quay.io/openshift-release-dev/ocp-release@sha256:4d3c8199b50cd1e129755336468759342255a0090d09424133df1ea60253da13

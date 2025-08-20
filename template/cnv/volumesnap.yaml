@@ -1,9 +1,0 @@
-apiVersion: snapshot.storage.k8s.io/v1
-kind: VolumeSnapshot
-metadata:
-  name: rhel9-snap
-  namespace: default
-spec:
-  volumeSnapshotClassName: ocs-storagecluster-rbdplugin-snapclass
-  source:
-    persistentVolumeClaimName: rhel9-placeholder

@@ -1,0 +1,73 @@
+{
+  "metrics": [
+    {
+      "name": "worker_cpu_ultilization_stdev",
+      "description": "Standard deviation of CPU utilization across worker nodes",
+      "query": "stddev(avg by (instance) (1 - rate(node_cpu_seconds_total{mode='idle'}[1m]) * on(instance) group_left() (label_replace(kube_node_role{role='worker'}, 'instance', '$1', 'node', '(.+)'))))",
+      "start": null,
+      "end": null,
+      "step": null
+    },
+    {
+      "name": "avg_cpu_utilization_across_workers",
+      "description": "Average CPU utilization across all worker nodes",
+      "query": "avg (1 - rate(node_cpu_seconds_total{mode='idle'}[1m]) * on(instance) group_left() (label_replace(kube_node_role{role='worker'}, 'instance', '$1', 'node', '(.+)')))",
+      "start": null,
+      "end": null,
+      "step": null
+    },
+    {
+      "name": "cpu_utilization_by_worker",
+      "description": "Per-node average CPU utilization for each worker",
+      "query": "avg by (instance) (1 - rate(node_cpu_seconds_total{mode='idle'}[1m]) * on(instance) group_left() label_replace(kube_node_role{role='worker'}, 'instance', '$1', 'node', '(.+)'))",
+      "start": null,
+      "end": null,
+      "step": null
+    },
+    {
+      "name": "worker_node_cpu_pressure",
+      "description": "worker node CPU pressure",
+      "query": "rate(node_pressure_cpu_waiting_seconds_total[1m]) * on(instance) group_left() label_replace(kube_node_role{role='worker'}, 'instance', '$1', 'node', '(.+)' )",
+      "start": null,
+      "end": null,
+      "step": null
+    },
+    {
+      "name": "avg_cpu_pressure_across_workers",
+      "description": "Average CPU pressure across workers",
+      "query": "avg(rate(node_pressure_cpu_waiting_seconds_total[1m]) * on(instance) group_left() label_replace(kube_node_role{role='worker'}, 'instance', '$1', 'node', '(.+)'))",
+      "start": null,
+      "end": null,
+      "step": null
+    },
+    {
+      "name": "stdev_cpu_pressure_across_workers",
+      "description": "Per-node average CPU utilization for each worker",
+      "query": "stddev(rate(node_pressure_cpu_waiting_seconds_total[1m]) * on(instance) group_left() label_replace(kube_node_role{role='worker'}, 'instance', '$1', 'node', '(.+)' ))",
+      "start": null,
+      "end": null,
+      "step": null
+    },
+    {
+      "name": "vcpu_wait_by_vmis",
+      "description": "guest vCPU times",
+      "query": "sum by (name) (rate(kubevirt_vmi_vcpu_delay_seconds_total[1m]))",
+      "start": null,
+      "end": null,
+      "step": null
+    },
+    {
+      "name": "avg_vcpu_wait_time",
+      "description": "avg guest vCPU wait time",
+      "query": "avg(sum by (name) (rate(kubevirt_vmi_vcpu_delay_seconds_total[1m])))",
+      "start": null,
+      "end": null,
+      "step": null
+    }
+  ],
+  "global_config": {
+    "start": "2025-04-24 06:47:54",
+    "end": "2025-04-24 07:09:33",
+    "step": "15s"
+  }
+}

@@ -1,0 +1,25 @@
+# the following metrics must follow the yaml format
+
+cpu_usage_by_container:
+    sum(irate(container_cpu_usage_seconds_total{namespace=~"clusters-kv-w10-lvm-25g-1",container!="POD",name!="", pod!~"virt-launcher.*|importer-kv.*"}[2m])) by (container)
+
+cpu_usage_by_pod:
+    sum(irate(container_cpu_usage_seconds_total{namespace=~"clusters-kv-w10-lvm-25g-1",container!="POD",name!="", pod!~"virt-launcher.*|importer-kv.*"}[2m])) by (pod)
+
+cpu_request_by_container:
+    sum(kube_pod_container_resource_requests{namespace="clusters-kv-w10-lvm-25g-1", pod!~"virt-launcher.*|importer-kv.*", resource="cpu"}) by (container)
+
+cpu_request_by_pod:
+    sum(kube_pod_container_resource_requests{namespace="clusters-kv-w10-lvm-25g-1", pod!~"virt-launcher.*|importer-kv.*", resource="cpu"}) by (pod)
+
+mem_usage_by_container:
+    sum(container_memory_rss{namespace=~"clusters-kv-w10-lvm-25g-1", container!="POD", pod!~"virt-launcher.*|importer-kv.*"}) by (container)
+
+mem_usage_by_pod:
+    sum(container_memory_rss{namespace=~"clusters-kv-w10-lvm-25g-1", container!="POD", pod!~"virt-launcher.*|importer-kv.*"}) by (pod)
+
+mem_request_by_container:
+    sum(kube_pod_container_resource_requests{namespace="clusters-kv-w10-lvm-25g-1", pod!~"virt-launcher.*|importer-kv.*", resource="memory"}) by (container)
+
+mem_request_by_pod:
+    sum(kube_pod_container_resource_requests{namespace="clusters-kv-w10-lvm-25g-1", pod!~"virt-launcher.*|importer-kv.*", resource="memory"}) by (pod)

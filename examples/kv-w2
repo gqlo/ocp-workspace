@@ -1,7 +1,0 @@
-pull-secret=/home/guoqingli/hypershift/config/pull-secret
-node-pool-replicas=2
-node-selector=kubernetes.io/infra-virtualization=virt-components
-etcd-storage-class=lvms-vg-nvme
-memory=16Gi
-cores=8
-release-image=quay.io/openshift-release-dev/ocp-release@sha256:e3fb8ace9881ae5428ae7f0ac93a51e3daa71fa215b5299cd3209e134cadfc9c
