@@ -24,7 +24,7 @@ spec:
         snapshot:
           namespace: {vm-ns}
           name: {VM_BASENAME}-{vm-ns}
-  runStrategy: Always
+  runStrategy: {RUN_STRATEGY}
   template:
     metadata:
       labels:
@@ -33,6 +33,8 @@ spec:
       domain:
         cpu:
           cores: {VM_CPU_CORES}
+        memory:
+          guest: {VM_MEMORY}
         devices:
           disks:
           - disk:
@@ -51,9 +53,7 @@ spec:
           bootloader:
             efi:
               secureBoot: false
-        resources:
-          requests:
-            memory: {VM_MEMORY}
+        {RESOURCES}
       evictionStrategy: LiveMigrate
       networks:
       - name: default
