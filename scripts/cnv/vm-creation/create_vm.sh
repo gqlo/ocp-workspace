@@ -15,6 +15,7 @@ BASE_PVC_NAME="rhel9-base"
 VM_BASENAME="rhel9"
 VM_CPU_CORES="1"
 VM_MEMORY="1Gi"
+# $0 is the script name, %/* removes everything after the /, so we get the directory name
 CREATE_VM_PATH=${CREATE_VM_PATH:-.:${0%/*}}
 VM_CPU_REQUEST=
 VM_MEMORY_REQUEST=
@@ -26,6 +27,7 @@ WAIT=0
 RECREATE_EXISTING_VMS=1
 yamlpath=()
 declare -A expected_vms=()
+# Split the CREATE_VM_PATH into an array using : as the delimiter
 IFS=: read -r -a yamlpath <<< "$CREATE_VM_PATH"
 
 doit=1
@@ -35,6 +37,7 @@ fatal() {
     exit 1
 }
 
+# | | | represents spaces that creates indentation for te continuation lines
 help() {
     if [[ -n "$*" ]] ; then echo "$*" ; fi
     cat <<EOF
@@ -71,7 +74,9 @@ process_option() {
     local option=
     local value=
     IFS=$'=' read -r option value <<< "$optstr"
+    # Normalize the option name to use - instead of _
     option=${option//_/-}
+    # Convert the option to lowercase for case-insensitive matching
     case "${option,,}" in
 	dv-url)    DV_URL=$value ;;
 	storage*)  STORAGE_SIZE=$value ;;
@@ -96,16 +101,20 @@ process_option() {
     esac
 }
 
+# process all the options one by one, - is treated as the option"-"
 while getopts 'nh-:' opt "$@" ; do
     case "$opt" in
 	n) doit=0		    ;;
 	h) help			    ;;
 	-) process_option "$OPTARG" ;;
-	*) help			    ;;
+	*) help	                    ;;
     esac
 done
+
+# clean all the arguments that have been processed so that the positional arguments are now the remaining arguments
 shift $((OPTIND-1))
 
+# no more than 2 positional arguments are allowed
 if (($# > 2)) ; then
     help
 fi
@@ -145,7 +154,6 @@ if ((NUM_VMS < NUM_NAMESPACES)) ; then
 fi
 
 # Check if template files exist
-
 find_file_on_path() {
     local file=$1
     local ydir
