@@ -111,7 +111,7 @@ while getopts 'nh-:' opt "$@" ; do
     esac
 done
 
-# clean all the arguments that have been processed so that the positional arguments are now the remaining arguments
+# clean all the optional arguments that have been processed by getopts so that the positional arguments are now the remaining arguments
 shift $((OPTIND-1))
 
 # no more than 2 positional arguments are allowed
@@ -201,6 +201,7 @@ LOG_FILE="${LOG_DIR}/$(date +%Y-%m-%dT%H:%M:%S).log"
 
 # Function to log with timestamp
 _log_message() {
+    # avoid conflicts with the global OPTIND variable
     local -i OPTIND=0
     local -i from_stdin=0
     while getopts v- opt "$@" ; do
