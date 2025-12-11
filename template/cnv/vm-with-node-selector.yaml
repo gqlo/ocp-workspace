@@ -1,0 +1,123 @@
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"kubevirt.io/v1","kind":"VirtualMachine","metadata":{"annotations":{},"name":"rhel9-1","namespace":"vm-ns-1"},"spec":{"dataVolumeTemplates":[{"apiVersion":"cdi.kubevirt.io/v1beta1","kind":"DataVolume","metadata":{"annotations":{"cdi.kubevirt.io/smartCloneFromExistingSnapshot":"vm-ns-1/rhel9-vm-ns-1"},"name":"rhel9-1"},"spec":{"pvc":{"accessModes":["ReadWriteMany"],"resources":{"requests":{"storage":"22Gi"}},"storageClassName":"ocs-storagecluster-ceph-rbd-virtualization","volumeMode":"Block"},"source":{"snapshot":{"name":"rhel9-vm-ns-1","namespace":"vm-ns-1"}}}}],"runStrategy":"Always","template":{"metadata":{"labels":{"kubevirt.io/domain":"rhel9"}},"spec":{"domain":{"cpu":{"cores":1},"devices":{"disks":[{"disk":{"bus":"virtio"},"name":"vda"}],"interfaces":[{"masquerade":{},"model":"virtio","name":"default"}],"networkInterfaceMultiqueue":true,"rng":{}},"features":{"smm":{"enabled":true}},"firmware":{"bootloader":{"efi":{"secureBoot":false}}},"memory":{"guest":"1Gi"}},"evictionStrategy":"LiveMigrate","networks":[{"name":"default","pod":{}}],"volumes":[{"dataVolume":{"name":"rhel9-1"},"name":"vda"}]}}}}
+    kubemacpool.io/transaction-timestamp: "2025-11-13T00:36:05.061283348Z"
+    kubevirt.io/latest-observed-api-version: v1
+    kubevirt.io/storage-observed-api-version: v1
+  creationTimestamp: "2025-11-11T14:22:50Z"
+  finalizers:
+  - kubevirt.io/virtualMachineControllerFinalize
+  generation: 2
+  name: rhel9-1
+  namespace: vm-ns-1
+  resourceVersion: "300436923"
+  uid: 24a819ca-5eb9-464d-98f6-dbd4ddba6f17
+spec:
+  dataVolumeTemplates:
+  - apiVersion: cdi.kubevirt.io/v1beta1
+    kind: DataVolume
+    metadata:
+      annotations:
+        cdi.kubevirt.io/smartCloneFromExistingSnapshot: vm-ns-1/rhel9-vm-ns-1
+      creationTimestamp: null
+      name: rhel9-1
+    spec:
+      pvc:
+        accessModes:
+        - ReadWriteMany
+        resources:
+          requests:
+            storage: 22Gi
+        storageClassName: ocs-storagecluster-ceph-rbd-virtualization
+        volumeMode: Block
+      source:
+        snapshot:
+          name: rhel9-vm-ns-1
+          namespace: vm-ns-1
+  runStrategy: Always
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        kubevirt.io/domain: rhel9
+    spec:
+      architecture: amd64
+      domain:
+        cpu:
+          cores: 1
+        devices:
+          disks:
+          - disk:
+              bus: virtio
+            name: vda
+          interfaces:
+          - macAddress: 02:a6:44:00:00:00
+            masquerade: {}
+            model: virtio
+            name: default
+          networkInterfaceMultiqueue: true
+          rng: {}
+        features:
+          acpi: {}
+          smm:
+            enabled: true
+        firmware:
+          bootloader:
+            efi:
+              secureBoot: false
+          serial: abe846c1-401a-4e42-a6c0-80f32b32f785
+          uuid: e0227048-7ad7-5c68-b340-4616ac38f945
+        machine:
+          type: pc-q35-rhel9.6.0
+        memory:
+          guest: 1Gi
+        resources: {}
+      evictionStrategy: LiveMigrate
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+      - dataVolume:
+          name: rhel9-1
+        name: vda
+status:
+  conditions:
+  - lastProbeTime: null
+    lastTransitionTime: "2025-11-13T22:16:44Z"
+    status: "True"
+    type: Ready
+  - lastProbeTime: null
+    lastTransitionTime: null
+    message: All of the VMI's DVs are bound and ready
+    reason: AllDVsReady
+    status: "True"
+    type: DataVolumesReady
+  - lastProbeTime: null
+    lastTransitionTime: null
+    status: "True"
+    type: LiveMigratable
+  - lastProbeTime: null
+    lastTransitionTime: null
+    status: "True"
+    type: StorageLiveMigratable
+  - lastProbeTime: "2025-11-11T14:23:19Z"
+    lastTransitionTime: null
+    status: "True"
+    type: AgentConnected
+  - lastProbeTime: null
+    lastTransitionTime: "2025-11-13T00:39:24Z"
+    message: a non-live-updatable field was changed in the template spec
+    status: "True"
+    type: RestartRequired
+  created: true
+  desiredGeneration: 2
+  observedGeneration: 1
+  printableStatus: Running
+  ready: true
+  runStrategy: Always
+  volumeSnapshotStatuses:
+  - enabled: true
+    name: vda

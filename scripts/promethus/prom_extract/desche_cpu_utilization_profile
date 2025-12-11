@@ -35,7 +35,7 @@
     {
       "name": "avg_cpu_pressure_across_workers",
       "description": "Average CPU pressure across workers",
-      "query": "avg(rate(node_pressure_cpu_waiting_seconds_total[1m]) * on(instance) group_left() label_replace(kube_node_role{role="worker"}, 'instance', '$1', 'node', '(.+)'))"
+      "query": "avg(rate(node_pressure_cpu_waiting_seconds_total[1m]) * on(instance) group_left() label_replace(kube_node_role{role="worker"}, 'instance', '$1', 'node', '(.+)'))", 
       "start": null,
       "end": null,
       "step": null
@@ -43,15 +43,15 @@
     {
       "name": "stdev_cpu_pressure_across_workers",
       "description": "Per-node average CPU utilization for each worker",
-      "query": "stddev(rate(node_pressure_cpu_waiting_seconds_total[1m]) * on(instance) group_left() label_replace(kube_node_role{role="worker"}, "instance", "$1", "node", "(.+)" ))"
+      "query": "stddev(rate(node_pressure_cpu_waiting_seconds_total[1m]) * on(instance) group_left() label_replace(kube_node_role{role="worker"}, "instance", "$1", "node", "(.+)" ))",
       "start": null,
       "end": null,
       "step": null
     }
   ],
   "global_config": {
-    "start": "2025-05-07 02:53:11",
-    "end": "2025-05-07 03:45:46",
-    "step": "15s"
+    "start": "2025-11-20 05:08:00",
+    "end": "2025-11-20 07:57:00",
+    "step": "5m"
   }
 }
