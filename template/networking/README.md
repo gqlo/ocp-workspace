@@ -312,7 +312,8 @@ sh-5.1# ip -d link show ovs-system
     link/ether e2:43:fd:d1:2e:58 brd ff:ff:ff:ff:ff:ff promiscuity 1  allmulti 0 minmtu 68 maxmtu 65535 
     openvswitch addrgenmode eui64 numtxqueues 1 numrxqueues 1 gso_max_size 65536 gso_max_segs 65535 tso_max_size 65536 tso_max_segs 65535 gro_max_size 65536 gso_ipv4_max_size 65536 gro_ipv4_max_size 65536
 
-# Here is the complete OVS topology, as we can see there are two bridges being created: br-ex which connect
+# Here is the complete OVS topology, as we can see there are two bridges being created: br-ex enslaves the physical NIC - ens2f0np0, which include 3 ports and the second bridge has N number of ports which connects all the containers via veth pairs.
+
 sh-5.1# ovs-vsctl show
 cbab9023-5b75-43cc-93fd-61db4e0d387f
     Bridge br-ex
@@ -359,81 +360,39 @@ cbab9023-5b75-43cc-93fd-61db4e0d387f
                 type: internal
     ovs_version: "3.4.3-66.el9fdp"
 
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                          External Network / Internet                         │
-└────────────────────────────────────┬────────────────────────────────────────┘
-                                     │
-                              [ens2f0np0]
-                           Physical NIC (system)
-                                     │
-╔════════════════════════════════════╪═════════════════════════════════════════╗
-║                                    │            Node: 198.18.0.9             ║
-║  ┌─────────────────────────────────┴──────────────────────────────────┐     ║
-║  │                          Bridge: br-ex                              │     ║
-║  │                     (External/Gateway Bridge)                       │     ║
-║  │                                                                     │     ║
-║  │  • Port: ens2f0np0 (physical NIC)                                 │     ║
-║  │  • Port: br-ex (internal - host access)                           │     ║
-║  │  • Port: patch-br-ex-to-br-int ◄─┐                                │     ║
-║  └────────────────────────────────────┼────────────────────────────────┘     ║
-║                                       │                                       ║
-║                              Virtual Patch Cable                              ║
-║                              (type: patch)                                    ║
-║                                       │                                       ║
-║  ┌────────────────────────────────────┼────────────────────────────────┐     ║
-║  │                                    └─► patch-br-int-to-br-ex        │     ║
-║  │                          Bridge: br-int                             │     ║
-║  │                     (Integration/Pod Network Bridge)                │     ║
-║  │                     fail_mode: secure | datapath: system            │     ║
-║  │                                                                     │     ║
-║  │  ┌────────────────────────────────────────────────────────────┐   │     ║
-║  │  │              Container/Pod Interfaces (~150)                │   │     ║
-║  │  │                                                              │   │     ║
-║  │  │  ┌──────────────────┐      ┌──────────────────┐           │   │     ║
-║  │  │  │ 7be093806debefd  │      │ 4952fbdba0f3a02  │    ...    │   │     ║
-║  │  │  │   (veth pair)    │      │   (veth pair)    │           │   │     ║
-║  │  │  └────────┬─────────┘      └────────┬─────────┘           │   │     ║
-║  │  │           │                         │                      │   │     ║
-║  │  └───────────┼─────────────────────────┼──────────────────────┘   │     ║
-║  │              ↓                         ↓                            │     ║
-║  │         Container 1               Container 2        ... (~150)    │     ║
-║  │                                                                     │     ║
-║  │  ┌────────────────────────────────────────────────────────────┐   │     ║
-║  │  │           Geneve Overlay Tunnels (to peer nodes)            │   │     ║
-║  │  │                                                              │   │     ║
-║  │  │  ovn-91667b-0  ════════════════════► Node 198.18.0.7       │   │     ║
-║  │  │  (type: geneve, csum=true, key=flow)                       │   │     ║
-║  │  │                                                              │   │     ║
-║  │  │  ovn-ae72c2-0  ════════════════════► Node 198.18.0.8       │   │     ║
-║  │  │  (type: geneve, csum=true, key=flow)                       │   │     ║
-║  │  │                                                              │   │     ║
-║  │  │  ovn-7d11d9-0  ════════════════════► Node 198.18.0.5       │   │     ║
-║  │  │  ovn-c73bfb-0  ════════════════════► Node 198.18.0.6       │   │     ║
-║  │  │  ovn-e1a79a-0  ════════════════════► Node 198.18.0.10      │   │     ║
-║  │  │                                                              │   │     ║
-║  │  └────────────────────────────────────────────────────────────┘   │     ║
-║  │                                                                     │     ║
-║  │  ┌────────────────────────────────────────────────────────────┐   │     ║
-║  │  │              Management & Internal Ports                    │   │     ║
-║  │  │                                                              │   │     ║
-║  │  │  • ovn-k8s-mp0 (type: internal)                            │   │     ║
-║  │  │    OVN-Kubernetes management port                          │   │     ║
-║  │  │                                                              │   │     ║
-║  │  │  • br-int (type: internal)                                 │   │     ║
-║  │  │    Bridge's own interface (for host access)                │   │     ║
-║  │  │                                                              │   │     ║
-║  │  └────────────────────────────────────────────────────────────┘   │     ║
-║  └─────────────────────────────────────────────────────────────────┘     ║
-║                                                                             ║
-║  ┌─────────────────────────────────────────────────────────────────┐     ║
-║  │                    Kernel Datapath Layer                         │     ║
-║  │                     (Not shown in ovs-vsctl)                     │     ║
-║  │                                                                   │     ║
-║  │  ovs-system (master interface)                                   │     ║
-║  │    └─ All above interfaces enslaved here                         │     ║
-║  │    └─ openvswitch.ko kernel module                               │     ║
-║  └─────────────────────────────────────────────────────────────────┘     ║
-╚═════════════════════════════════════════════════════════════════════════════╝
+
+# here is a high level flow diagrams of those two bridges: br-ex, br-int and those ports that are connected to containers.
+External Network/Internet
+        │
+        │ (Ethernet cable plugged into Port 1)
+        ↓
+┌───────────────────────────────────────┐
+│       Switch: br-ex                   │
+│       (3-port switch)                 │
+│                                       │
+│  [Port 1]  [Port 2]  [Port 3]       │
+│     │         │         │             │
+│     │         │         └────────┐    │
+│  ens2f0np0  br-ex            patch   │
+│  (physical) (virtual)      (virtual) │
+└─────────────────────────────────┬─────┘
+                                  │
+                    Virtual Patch Cable
+                    (like an Ethernet cable)
+                                  │
+┌─────────────────────────────────┴─────┐
+│       Switch: br-int                  │
+│       (157-port switch)               │
+│                                       │
+│  [Port 1] [Port 2] [Port 3] ... [157]│
+│     │        │        │                │
+│   patch    veth1    veth2    ... more │
+│  (from     (to      (to              │
+│   br-ex)   pod-1)   pod-2)           │
+└───────────┬─────────┬─────────────────┘
+            │         │
+        Container1  Container2  ... (~150 containers)
+
 
 ```
 
