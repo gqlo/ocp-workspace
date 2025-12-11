@@ -250,6 +250,193 @@ sh-5.1# curl http://127.0.0.1:8080/hello.txt
 Hello World
 
 ```
+### node to container communication
+```bash
+# find out which node the pod is running
+oc get pod -o wide -n network-trace 
+NAME                             READY   STATUS    RESTARTS   AGE   IP             NODE               NOMINATED NODE   READINESS GATES
+nettools-dual-pod                2/2     Running   0          15d   10.128.2.43    m42-h32-000-r650   <none>           <none>
+
+
+# we should be able to curl the static file within that node using the pod IP
+[root@m42-h27-000-r650 ~]# oc debug node/m42-h32-000-r650
+Temporary namespace openshift-debug-wjxnq is created for debugging node...
+Starting pod/m42-h32-000-r650-debug-vtjjz ...
+To use host binaries, run chroot /host
+Pod IP: 198.18.0.9
+If you dont see a command prompt, try pressing enter.
+sh-5.1# chroot /host
+sh-5.1# curl http://10.128.2.43:8080/hello.txt
+Hello World
+sh-5.1# 
+
+# use crictl tool to check those two containers running on this host
+sh-5.1# crictl ps | grep dual
+da7e98b24503f       quay.io/rh_ee_lguoqing/nettools-fedora@sha256:94790b86e5e1db5e80d9b5987ea7c8fa1567a6b6a735ee3f00fb082941ba6a01                                                     2 weeks ago         Running             nettools-container-2                    0                   7be093806debe       nettools-dual-pod
+b5ec119e63fa6       quay.io/rh_ee_lguoqing/nettools-fedora@sha256:94790b86e5e1db5e80d9b5987ea7c8fa1567a6b6a735ee3f00fb082941ba6a01                                                     2 weeks ago         Running             nettools-container-1                    0                   7be093806debe       nettools-dual-pod
+sh-5.1# 
+
+# examine namespaces of this pod
+crictl inspectp 7be093806debe | jq -r '.info.runtimeSpec.linux.namespaces[] | select(.type=="network").path'
+/var/run/netns/67f12702-ca28-499f-b79f-e317ce158fe2
+
+# enter that network namespace and examine the network interfaces, we will see a veth pair etho0@if4615, it tells you that this eth0 interface is connected to interface index 4615 on the other side - in this case an interface on the host side.
+
+sh-5.1# nsenter --net=/var/run/netns/67f12702-ca28-499f-b79f-e317ce158fe2 
+[systemd]
+Failed Units: 1
+  NetworkManager-wait-online.service
+[root@m42-h32-000-r650 /]# ip a
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+    inet6 ::1/128 scope host 
+       valid_lft forever preferred_lft forever
+2: eth0@if4615: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1400 qdisc noqueue state UP group default 
+    link/ether 0a:58:0a:80:02:2b brd ff:ff:ff:ff:ff:ff link-netns b4c80c54-362d-405e-8c54-a170a7de8386
+    inet 10.128.2.43/23 brd 10.128.3.255 scope global eth0
+       valid_lft forever preferred_lft forever
+    inet6 fe80::858:aff:fe80:22b/64 scope link 
+       valid_lft forever preferred_lft forever
+
+# if we grep the interface index on the host side, we will see that this interface is connect to the other end - the container side on the second index - "2: eth0@if4615"  <--> 4615: 7be093806debefd@if2, you might have noticed, the interface name here used is the same as the pod ID. Check ref[1] more information on Linux interfaces. 
+
+sh-5.1# ip link show | grep 4615
+4615: 7be093806debefd@if2: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1400 qdisc noqueue master ovs-system state UP mode DEFAULT group default 
+
+# from the output above, we can also see that veth 4615 is enslaved by a master called ovs-system, the details of this interface shows that it is an openvswitch[2] interface which is not a standard linux network interface. This OVN-kubernetes[3] architure diagram also shows how OVS fits into the picture. 
+
+sh-5.1# ip -d link show ovs-system
+11: ovs-system: <BROADCAST,MULTICAST> mtu 1500 qdisc noop state DOWN mode DEFAULT group default qlen 1000
+    link/ether e2:43:fd:d1:2e:58 brd ff:ff:ff:ff:ff:ff promiscuity 1  allmulti 0 minmtu 68 maxmtu 65535 
+    openvswitch addrgenmode eui64 numtxqueues 1 numrxqueues 1 gso_max_size 65536 gso_max_segs 65535 tso_max_size 65536 tso_max_segs 65535 gro_max_size 65536 gso_ipv4_max_size 65536 gro_ipv4_max_size 65536
+
+# Here is the complete OVS topology, as we can see there are two bridges being created: br-ex which connect
+sh-5.1# ovs-vsctl show
+cbab9023-5b75-43cc-93fd-61db4e0d387f
+    Bridge br-ex
+        Port ens2f0np0
+            Interface ens2f0np0
+                type: system
+        Port br-ex
+            Interface br-ex
+                type: internal
+        Port patch-br-ex_m42-h32-000-r650-to-br-int
+            Interface patch-br-ex_m42-h32-000-r650-to-br-int
+                type: patch
+                options: {peer=patch-br-int-to-br-ex_m42-h32-000-r650}
+    Bridge br-int
+        fail_mode: secure
+        datapath_type: system
+        Port "7be093806debefd"
+            Interface "7be093806debefd"
+        Port "4952fbdba0f3a02"
+            Interface "4952fbdba0f3a02"
+        ...
+        [~150 more container veth interfaces]
+        ...
+        Port patch-br-int-to-br-ex_m42-h32-000-r650
+            Interface patch-br-int-to-br-ex_m42-h32-000-r650
+                type: patch
+                options: {peer=patch-br-ex_m42-h32-000-r650-to-br-int}
+        Port ovn-k8s-mp0
+            Interface ovn-k8s-mp0
+                type: internal
+        Port ovn-91667b-0
+            Interface ovn-91667b-0
+                type: geneve
+                options: {csum="true", key=flow, local_ip="198.18.0.9", remote_ip="198.18.0.7"}
+        Port ovn-ae72c2-0
+            Interface ovn-ae72c2-0
+                type: geneve
+                options: {csum="true", key=flow, local_ip="198.18.0.9", remote_ip="198.18.0.8"}
+        ...
+        [3 more Geneve tunnels to nodes .5, .6, .10]
+        ...
+        Port br-int
+            Interface br-int
+                type: internal
+    ovs_version: "3.4.3-66.el9fdp"
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          External Network / Internet                         │
+└────────────────────────────────────┬────────────────────────────────────────┘
+                                     │
+                              [ens2f0np0]
+                           Physical NIC (system)
+                                     │
+╔════════════════════════════════════╪═════════════════════════════════════════╗
+║                                    │            Node: 198.18.0.9             ║
+║  ┌─────────────────────────────────┴──────────────────────────────────┐     ║
+║  │                          Bridge: br-ex                              │     ║
+║  │                     (External/Gateway Bridge)                       │     ║
+║  │                                                                     │     ║
+║  │  • Port: ens2f0np0 (physical NIC)                                 │     ║
+║  │  • Port: br-ex (internal - host access)                           │     ║
+║  │  • Port: patch-br-ex-to-br-int ◄─┐                                │     ║
+║  └────────────────────────────────────┼────────────────────────────────┘     ║
+║                                       │                                       ║
+║                              Virtual Patch Cable                              ║
+║                              (type: patch)                                    ║
+║                                       │                                       ║
+║  ┌────────────────────────────────────┼────────────────────────────────┐     ║
+║  │                                    └─► patch-br-int-to-br-ex        │     ║
+║  │                          Bridge: br-int                             │     ║
+║  │                     (Integration/Pod Network Bridge)                │     ║
+║  │                     fail_mode: secure | datapath: system            │     ║
+║  │                                                                     │     ║
+║  │  ┌────────────────────────────────────────────────────────────┐   │     ║
+║  │  │              Container/Pod Interfaces (~150)                │   │     ║
+║  │  │                                                              │   │     ║
+║  │  │  ┌──────────────────┐      ┌──────────────────┐           │   │     ║
+║  │  │  │ 7be093806debefd  │      │ 4952fbdba0f3a02  │    ...    │   │     ║
+║  │  │  │   (veth pair)    │      │   (veth pair)    │           │   │     ║
+║  │  │  └────────┬─────────┘      └────────┬─────────┘           │   │     ║
+║  │  │           │                         │                      │   │     ║
+║  │  └───────────┼─────────────────────────┼──────────────────────┘   │     ║
+║  │              ↓                         ↓                            │     ║
+║  │         Container 1               Container 2        ... (~150)    │     ║
+║  │                                                                     │     ║
+║  │  ┌────────────────────────────────────────────────────────────┐   │     ║
+║  │  │           Geneve Overlay Tunnels (to peer nodes)            │   │     ║
+║  │  │                                                              │   │     ║
+║  │  │  ovn-91667b-0  ════════════════════► Node 198.18.0.7       │   │     ║
+║  │  │  (type: geneve, csum=true, key=flow)                       │   │     ║
+║  │  │                                                              │   │     ║
+║  │  │  ovn-ae72c2-0  ════════════════════► Node 198.18.0.8       │   │     ║
+║  │  │  (type: geneve, csum=true, key=flow)                       │   │     ║
+║  │  │                                                              │   │     ║
+║  │  │  ovn-7d11d9-0  ════════════════════► Node 198.18.0.5       │   │     ║
+║  │  │  ovn-c73bfb-0  ════════════════════► Node 198.18.0.6       │   │     ║
+║  │  │  ovn-e1a79a-0  ════════════════════► Node 198.18.0.10      │   │     ║
+║  │  │                                                              │   │     ║
+║  │  └────────────────────────────────────────────────────────────┘   │     ║
+║  │                                                                     │     ║
+║  │  ┌────────────────────────────────────────────────────────────┐   │     ║
+║  │  │              Management & Internal Ports                    │   │     ║
+║  │  │                                                              │   │     ║
+║  │  │  • ovn-k8s-mp0 (type: internal)                            │   │     ║
+║  │  │    OVN-Kubernetes management port                          │   │     ║
+║  │  │                                                              │   │     ║
+║  │  │  • br-int (type: internal)                                 │   │     ║
+║  │  │    Bridge's own interface (for host access)                │   │     ║
+║  │  │                                                              │   │     ║
+║  │  └────────────────────────────────────────────────────────────┘   │     ║
+║  └─────────────────────────────────────────────────────────────────┘     ║
+║                                                                             ║
+║  ┌─────────────────────────────────────────────────────────────────┐     ║
+║  │                    Kernel Datapath Layer                         │     ║
+║  │                     (Not shown in ovs-vsctl)                     │     ║
+║  │                                                                   │     ║
+║  │  ovs-system (master interface)                                   │     ║
+║  │    └─ All above interfaces enslaved here                         │     ║
+║  │    └─ openvswitch.ko kernel module                               │     ║
+║  └─────────────────────────────────────────────────────────────────┘     ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+
+```
+
 
 ## Requirements
 
@@ -259,4 +446,9 @@ Hello World
 ## Notes
 
 - The networking tools container requires privileged access for some operations (e.g., packet capture on host interfaces)
+
+## References
+1. [Linux interfaces](https://developers.redhat.com/blog/2018/10/22/introduction-to-linux-interfaces-for-virtual-networking)
+2. [Openvswitch](https://docs.openvswitch.org/en/latest/intro/what-is-ovs/)
+3. [OVN-kubernetes](https://docs.redhat.com/en/documentation/openshift_container_platform/4.20/html/ovn-kubernetes_network_plugin/ovn-kubernetes-architecture-assembly#ovn-kubernetes-architecture-con)
 
