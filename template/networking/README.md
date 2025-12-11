@@ -396,6 +396,58 @@ sh-5.1# ip -d link show ovs-system
 11: ovs-system: <BROADCAST,MULTICAST> mtu 1500 qdisc noop state DOWN mode DEFAULT group default qlen 1000
     link/ether e2:43:fd:d1:2e:58 brd ff:ff:ff:ff:ff:ff promiscuity 1  allmulti 0 minmtu 68 maxmtu 65535 
     openvswitch addrgenmode eui64 numtxqueues 1 numrxqueues 1 gso_max_size 65536 gso_max_segs 65535 tso_max_size 65536 tso_max_segs 65535 gro_max_size 65536 gso_ipv4_max_size 65536 gro_ipv4_max_size 65536
+
+# monitor the veth port on the host side
+[root@m42-h27-000-r650 ~]# oc debug node/m42-h32-000-r650
+Temporary namespace openshift-debug-r97rt is created for debugging node...
+Starting pod/m42-h32-000-r650-debug-sgwtr ...
+To use host binaries, run chroot /host
+Pod IP: 198.18.0.9
+If you dont see a command prompt, try pressing enter.
+sh-5.1# tcpdump -i 7be093806debefd -n
+dropped privs to tcpdump
+tcpdump: verbose output suppressed, use -v[v]... for full protocol decode
+listening on 7be093806debefd, link-type EN10MB (Ethernet), snapshot length 262144 bytes
+08:41:14.362319 IP 10.128.2.43 > 8.8.8.8: ICMP echo request, id 6, seq 1, length 64
+08:41:14.376761 IP 8.8.8.8 > 10.128.2.43: ICMP echo reply, id 6, seq 1, length 64
+08:41:19.454943 ARP, Request who-has 10.128.2.1 tell 10.128.2.43, length 28
+08:41:19.458948 ARP, Reply 10.128.2.1 is-at 0a:58:a9:fe:01:01, length 28
+
+
+# monitor the container eth nic
+[root@m42-h27-000-r650 ~]#  oc rsh nettools-dual-pod
+Defaulted container "nettools-container-1" out of: nettools-container-1, nettools-container-2
+sh-5.1# tcpdump -i eth0 -n
+dropped privs to tcpdump
+tcpdump: verbose output suppressed, use -v[v]... for full protocol decode
+listening on eth0, link-type EN10MB (Ethernet), snapshot length 262144 bytes
+08:41:14.362305 IP 10.128.2.43 > 8.8.8.8: ICMP echo request, id 6, seq 1, length 64
+08:41:14.376767 IP 8.8.8.8 > 10.128.2.43: ICMP echo reply, id 6, seq 1, length 64
+08:41:19.454905 ARP, Request who-has 10.128.2.1 tell 10.128.2.43, length 28
+08:41:19.458955 ARP, Reply 10.128.2.1 is-at 0a:58:a9:fe:01:01, length 28
+
+# send a ICMP packet to 8.8.8.8
+[root@m42-h27-000-r650 ~]# oc debug node/m42-h32-000-r650
+Temporary namespace openshift-debug-mhpwp is created for debugging node...
+Starting pod/m42-h32-000-r650-debug-nc7fk ...
+To use host binaries, run chroot /host
+Pod IP: 198.18.0.9
+If you dont see a command prompt, try pressing enter.
+sh-5.1# chroot /host
+sh-5.1# nsenter --net=/var/run/netns/67f12702-ca28-499f-b79f-e317ce158fe2
+[systemd]
+Failed Units: 1
+  NetworkManager-wait-online.service
+[root@m42-h32-000-r650 /]# ping 8.8.8.8 -c 1
+PING 8.8.8.8 (8.8.8.8) 56(84) bytes of data.
+64 bytes from 8.8.8.8: icmp_seq=1 ttl=107 time=14.5 ms
+
+--- 8.8.8.8 ping statistics ---
+1 packets transmitted, 1 received, 0% packet loss, time 0ms
+rtt min/avg/max/mdev = 14.507/14.507/14.507/0.000 ms
+[root@m42-h32-000-r650 /]# 
+
+# Nothing special from sending packet from one end of the veth pair to another, as we can see, the ICMP packet were sent and replied from google.
 ```
 
 
