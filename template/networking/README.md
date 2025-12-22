@@ -335,7 +335,7 @@ External Network/Internet
 
 ```
 
-### Container/bridge-port veth pair
+### Container, bridge-port veth pair and physical nic
 ```bash
 # find out which node the pod is running
 oc get pod -o wide -n network-trace 
@@ -397,7 +397,15 @@ sh-5.1# ip -d link show ovs-system
     link/ether e2:43:fd:d1:2e:58 brd ff:ff:ff:ff:ff:ff promiscuity 1  allmulti 0 minmtu 68 maxmtu 65535 
     openvswitch addrgenmode eui64 numtxqueues 1 numrxqueues 1 gso_max_size 65536 gso_max_segs 65535 tso_max_size 65536 tso_max_segs 65535 gro_max_size 65536 gso_ipv4_max_size 65536 gro_ipv4_max_size 65536
 
-# monitor the veth port on the host side
+# There are 3 devices assoicated with ovs-system, ens2f0np0 -  the physical nic that's enslaved by ovs-system, 
+genev_sys_6081 - for geneve tunneling. 
+sh-5.1# ip link show | grep "ovs-system" | grep -v "@if"
+8: ens2f0np0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq master ovs-system state UP mode DEFAULT group default qlen 1000
+11: ovs-system: <BROADCAST,MULTICAST> mtu 1500 qdisc noop state DOWN mode DEFAULT group default qlen 1000
+14: genev_sys_6081: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 65000 qdisc noqueue master ovs-system state UNKNOWN mode DEFAULT group default qlen 1000
+
+
+# capture packets go through the veth port on the host side
 [root@m42-h27-000-r650 ~]# oc debug node/m42-h32-000-r650
 Temporary namespace openshift-debug-r97rt is created for debugging node...
 Starting pod/m42-h32-000-r650-debug-sgwtr ...
@@ -408,23 +416,38 @@ sh-5.1# tcpdump -i 7be093806debefd -n
 dropped privs to tcpdump
 tcpdump: verbose output suppressed, use -v[v]... for full protocol decode
 listening on 7be093806debefd, link-type EN10MB (Ethernet), snapshot length 262144 bytes
-08:41:14.362319 IP 10.128.2.43 > 8.8.8.8: ICMP echo request, id 6, seq 1, length 64
-08:41:14.376761 IP 8.8.8.8 > 10.128.2.43: ICMP echo reply, id 6, seq 1, length 64
-08:41:19.454943 ARP, Request who-has 10.128.2.1 tell 10.128.2.43, length 28
-08:41:19.458948 ARP, Reply 10.128.2.1 is-at 0a:58:a9:fe:01:01, length 28
+04:50:13.113152 IP 10.128.2.43 > 8.8.8.8: ICMP echo request, id 15, seq 1, length 64
+04:50:13.127747 IP 8.8.8.8 > 10.128.2.43: ICMP echo reply, id 15, seq 1, length 64
+04:50:18.590973 ARP, Request who-has 10.128.2.1 tell 10.128.2.43, length 28
+04:50:18.591379 ARP, Reply 10.128.2.1 is-at 0a:58:a9:fe:01:01, length 28
 
 
-# monitor the container eth nic
+# capture packets go through container eth0 nic
 [root@m42-h27-000-r650 ~]#  oc rsh nettools-dual-pod
 Defaulted container "nettools-container-1" out of: nettools-container-1, nettools-container-2
 sh-5.1# tcpdump -i eth0 -n
 dropped privs to tcpdump
 tcpdump: verbose output suppressed, use -v[v]... for full protocol decode
 listening on eth0, link-type EN10MB (Ethernet), snapshot length 262144 bytes
-08:41:14.362305 IP 10.128.2.43 > 8.8.8.8: ICMP echo request, id 6, seq 1, length 64
-08:41:14.376767 IP 8.8.8.8 > 10.128.2.43: ICMP echo reply, id 6, seq 1, length 64
-08:41:19.454905 ARP, Request who-has 10.128.2.1 tell 10.128.2.43, length 28
-08:41:19.458955 ARP, Reply 10.128.2.1 is-at 0a:58:a9:fe:01:01, length 28
+04:50:13.113137 IP 10.128.2.43 > 8.8.8.8: ICMP echo request, id 15, seq 1, length 64
+04:50:13.127754 IP 8.8.8.8 > 10.128.2.43: ICMP echo reply, id 15, seq 1, length 64
+04:50:18.590915 ARP, Request who-has 10.128.2.1 tell 10.128.2.43, length 28
+04:50:18.591382 ARP, Reply 10.128.2.1 is-at 0a:58:a9:fe:01:01, length 28
+
+# capture packets go through the physical nic
+[root@m42-h27-000-r650 ~]# oc debug node/m42-h32-000-r650
+Temporary namespace openshift-debug-r97rt is created for debugging node...
+Starting pod/m42-h32-000-r650-debug-sgwtr ...
+To use host binaries, run chroot /host
+Pod IP: 198.18.0.9
+If you dont see a command prompt, try pressing enter.
+sh-5.1# tcpdump icmp -i ens2f0np0 -n
+dropped privs to tcpdump
+tcpdump: verbose output suppressed, use -v[v]... for full protocol decode
+listening on ens2f0np0, link-type EN10MB (Ethernet), snapshot length 262144 bytes
+04:50:13.115888 IP 198.18.0.9 > 8.8.8.8: ICMP echo request, id 15, seq 1, length 64
+04:50:13.124988 IP 8.8.8.8 > 198.18.0.9: ICMP echo reply, id 15, seq 1, length 64
+
 
 # send a ICMP packet to 8.8.8.8
 [root@m42-h27-000-r650 ~]# oc debug node/m42-h32-000-r650
@@ -447,10 +470,11 @@ PING 8.8.8.8 (8.8.8.8) 56(84) bytes of data.
 rtt min/avg/max/mdev = 14.507/14.507/14.507/0.000 ms
 [root@m42-h32-000-r650 /]# 
 
-# Nothing special from sending packet from one end of the veth pair to another, as we can see, the ICMP packet were sent and replied from google.
+
+# The tcp dump between veth port on the host side and the nic eth0 within the container looks almost identical, which is what we expect for a veth pair, can you tell the difference between those two? 
+
+# Looking at the physical nic tcp dump, the source IP address changed from 10.128.2.43 to 198.18.0.9 which indicates some sort of NATing was going on the OVN layer.
 ```
-
-
 
 
 ## Requirements
