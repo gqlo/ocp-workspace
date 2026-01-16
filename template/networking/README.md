@@ -476,7 +476,6 @@ rtt min/avg/max/mdev = 14.507/14.507/14.507/0.000 ms
 # Looking at the physical nic tcp dump, the source IP address changed from 10.128.2.43 to 198.18.0.9 which indicates some sort of NATing was going on the OVN layer.
 ```
 
-
 ## Requirements
 
 - OpenShift cluster
