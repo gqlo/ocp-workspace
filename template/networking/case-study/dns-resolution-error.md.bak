@@ -1,0 +1,445 @@
+# Debugging DNS resolution issue: Unable to Connect to Prometheus Endpoint
+
+## Overview
+
+My colleague ran into an issue where the Grafana dashboard is not able to connect to the Prometheus service due to a DNS resolution related error. I thought this would be a really good exercise, where we can apply what we have been learning about network tracing in OCP to a real debugging case. In the end, we retain from our studies only what we practically apply. 
+
+## Environment Details
+
+- **Namespace**: `dittybopper`
+- **Grafana Pod**: `dittybopper-79954578d9-44zs7` (IP: `10.128.3.187`)
+- **Grafana Renderer Pod**: `grafana-renderer-684d95697-mk7xv` (IP: `10.128.3.186`)
+- **Node**: `m42-h32-000-r650` (Host IP: `198.18.0.9`)
+- **CNI**: OVN-Kubernetes
+- **Network Gateway**: `10.128.2.1`
+
+## Relationship Between Pods
+
+The architecture uses two separate pods that work together:
+
+### 1. Grafana Pod (`dittybopper-79954578d9-44zs7`)
+- **Primary Function**: Main Grafana application server with dashboard syncer
+- **Containers**:
+  - **`dittybopper`**: Grafana 9.4.3 (port 3000)
+    - Serves Grafana web UI
+    - Handles user authentication and dashboard management
+    - Queries Prometheus and other datasources
+    - Manages dashboard configurations
+  - **`dittybopper-syncer`**: Dashboard synchronization service
+    - Connects to Grafana at `localhost:3000`
+    - Syncs performance dashboards from `/performance-dashboards/rendered/`
+    - Automates dashboard provisioning
+
+### 2. Grafana Renderer Pod (`grafana-renderer-684d95697-mk7xv`)
+- **Primary Function**: Dashboard image rendering service
+- **Container**: `renderer` (grafana-image-renderer)
+- **Port**: 8081 (HTTP)
+- **Responsibilities**:
+  - Renders Grafana dashboards as images (PNG/PDF)
+  - Used for sharing dashboards via email, reports, or alerts
+  - Handles screenshot generation for dashboard previews
+
+### How They Work Together
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              Grafana + Renderer Architecture                    │
+└─────────────────────────────────────────────────────────────────┘
+
+User Request (Dashboard View/Share)
+    │
+    ▼
+┌──────────────────────────────────────────────────────────────┐
+│  Grafana Pod (dittybopper-79954578d9-44zs7)                 │
+│  - IP: 10.128.3.187                                          │
+│  - Service: dittybopper (172.30.245.102:3000)              │
+│                                                              │
+│  Containers:                                                 │
+│  ┌────────────────────────────────────────────────────┐    │
+│  │  dittybopper (Grafana)                              │    │
+│  │  - Port: 3000                                       │    │
+│  │  - When user requests dashboard rendering:          │    │
+│  │    1. Receives render request                      │    │
+│  │    2. Forwards to external renderer service        │    │
+│  └────────────────────────────────────────────────────┘    │
+│  ┌────────────────────────────────────────────────────┐    │
+│  │  dittybopper-syncer                                │    │
+│  │  - Syncs dashboards from local filesystem          │    │
+│  │  - Connects to Grafana at localhost:3000          │    │
+│  └────────────────────────────────────────────────────┘    │
+└──────────────────────────────────────────────────────────────┘
+    │
+    │ HTTP Request
+    │ POST http://renderer.dittybopper.svc:8081/render
+    │ (Configured via GF_RENDERING_SERVER_URL env var)
+    ▼
+┌──────────────────────────────────────────────────────────────┐
+│  Renderer Service                                            │
+│  - Service Name: renderer                                    │
+│  - ClusterIP: 172.30.15.195                                 │
+│  - Port: 8081                                                │
+└──────────────────────────────────────────────────────────────┘
+    │
+    │ Service → Pod Endpoint
+    ▼
+┌──────────────────────────────────────────────────────────────┐
+│  Grafana Renderer Pod (grafana-renderer-684d95697-mk7xv)    │
+│  - IP: 10.128.3.186                                          │
+│  - Port: 8081                                                │
+│  - Image: grafana/grafana-image-renderer:latest             │
+│                                                              │
+│  Processing:                                                 │
+│  1. Receives dashboard data from Grafana                     │
+│  2. Renders dashboard as image (PNG/PDF)                    │
+│  3. Returns rendered image to Grafana                        │
+└──────────────────────────────────────────────────────────────┘
+    │
+    │ Rendered Image Response
+    ▼
+┌──────────────────────────────────────────────────────────────┐
+│  Grafana Pod                                                 │
+│  - Receives rendered image                                  │
+│  - Returns to user (download/share/email)                    │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### Key Configuration
+
+The relationship is configured via environment variables in the Grafana pod:
+
+- **`GF_RENDERING_SERVER_URL`**: `http://renderer.dittybopper.svc:8081/render`
+  - Tells Grafana where to send rendering requests
+  - Uses Kubernetes service DNS name for service discovery
+
+- **`GF_RENDERING_CALLBACK_URL`**: `http://dittybopper.dittybopper.svc:3000/`
+  - Callback URL for the renderer to communicate back to Grafana
+  - Used for asynchronous rendering operations
+
+### Why Separate Pods?
+
+1. **Resource Isolation**: Rendering is CPU/memory intensive; separating it prevents impacting the main Grafana service
+2. **Scalability**: Renderer pods can be scaled independently based on rendering workload
+3. **Security**: Renderer runs in a restricted security context (non-root, dropped capabilities)
+4. **Maintainability**: Easier to update or troubleshoot rendering issues without affecting Grafana
+
+### Important Notes
+
+- The renderer pod is **not** involved in the Prometheus connection issue
+- The renderer is only used when users request dashboard images (share, email, reports)
+- Regular dashboard viewing and Prometheus queries go directly through the Grafana pod
+- Both pods are on the same node (`m42-h32-000-r650`) but have different IP addresses
+
+## Basic Data Flow
+
+Understanding the data flow is crucial for identifying where connection failures occur. The following diagram illustrates how Grafana connects to Prometheus:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         Data Flow                                │
+└─────────────────────────────────────────────────────────────────┘
+
+User/Application
+    │
+    │ HTTP Request (Dashboard Query)
+    ▼
+┌──────────────────────────────────────────────────────────────┐
+│  Grafana Pod (dittybopper-79954578d9-44zs7)                 │
+│  - Pod IP: 10.128.3.187                                      │
+│                                                              │
+│  Container: dittybopper (Grafana)                           │
+│  - Container Port: 3000                                      │
+│  - Image: quay.io/cloud-bulldozer/grafana:9.4.3            │
+│                                                              │
+│  ┌────────────────────────────────────────────────────┐    │
+│  │  Datasource Configuration                           │    │
+│  │  - Mount Path: /etc/grafana/provisioning/datasources│    │
+│  │  - Source: ConfigMap 'sc-ocp-prom'                 │    │
+│  │  - Contains: Prometheus endpoint URL, auth config  │    │
+│  └────────────────────────────────────────────────────┘    │
+│                                                              │
+│  (Note: dittybopper-syncer container also in this pod)      │
+└──────────────────────────────────────────────────────────────┘
+    │
+    │ PromQL Query / API Request
+    │ (via HTTP/HTTPS)
+    ▼
+┌──────────────────────────────────────────────────────────────┐
+│  Kubernetes Service Discovery                               │
+│  - DNS Resolution (ClusterFirst policy)                     │
+│  - Service name resolution                                  │
+│  - Endpoint selection                                       │
+└──────────────────────────────────────────────────────────────┘
+    │
+    │ Network Traffic
+    │ (OVN-Kubernetes CNI)
+    ▼
+┌──────────────────────────────────────────────────────────────┐
+│  OVN-Kubernetes Network Layer                               │
+│  - Pod Network: 10.128.0.0/14                               │
+│  - Gateway: 10.128.2.1                                      │
+│  - Routes:                                                  │
+│    * 10.128.0.0/14 → 10.128.2.1                            │
+│    * 172.30.0.0/16 → 10.128.2.1 (Service CIDR)            │
+│    * 100.64.0.0/16 → 10.128.2.1                            │
+└──────────────────────────────────────────────────────────────┘
+    │
+    │ Outbound Connection
+    ▼
+┌──────────────────────────────────────────────────────────────┐
+│  Prometheus Endpoint                                         │
+│  - Service/Endpoint (to be verified)                        │
+│  - Port: (to be verified)                                   │
+│  - Protocol: HTTP/HTTPS                                      │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### Key Components in the Data Flow:
+
+1. **Grafana Container** (`dittybopper` container in `dittybopper-79954578d9-44zs7` pod):
+   - Receives queries from users/applications
+   - Reads datasource configuration from mounted ConfigMap `sc-ocp-prom`
+   - Initiates HTTP/HTTPS requests to Prometheus endpoint
+
+2. **Datasource Configuration**:
+   - Mounted at `/etc/grafana/provisioning/datasources` from ConfigMap `sc-ocp-prom`
+   - Contains Prometheus URL, authentication credentials, and connection parameters
+   - **Critical**: This is the first place to check if the endpoint URL is incorrect
+
+3. **Network Layer**:
+   - OVN-Kubernetes CNI handles pod-to-pod and pod-to-service communication
+   - Pod has IP `10.128.3.187/23` with gateway `10.128.2.1`
+   - Routes configured for cluster networking
+
+4. **Prometheus Endpoint**:
+   - Target service/endpoint that Grafana attempts to connect to
+   - Must be reachable from the Grafana pod's network namespace
+
+
+## Step-by-Step Debugging Process
+### Error message 
+```
+{
+    "results": {
+        "test": {
+            "error": "Get \"https://prometheus-k8s.openshift-monitoring.svc.cluster.local:9091/api/v1/query?query=1%2B1&time=1769108773.222\": dial tcp: lookup prometheus-k8s.openshift-monitoring.svc.cluster.local: no such host",
+            "status": 500
+        }
+    }
+}
+```
+`dial tcp: lookup <hostname>: no such host` is a standard error message return by Go net package when there is something wrong with resolving a hostname, suggesting a DNS resolution related error. 
+
+### Test the dns resolution directly within grafana pod
+The interesting thing is that, when we use nslookup to test this hostname, it is able to resolve to the IP address. It is odd, but also reassuring that our coreDNS server is working properly.
+```
+14:34:17 guoqingli@rh:~$ oc rsh -n dittybopper dittybopper-5ffb885bc9-z77ll
+Defaulted container "dittybopper" out of: dittybopper, dittybopper-syncer
+/usr/share/grafana $ nslookup prometheus-k8s.openshift-monitoring.svc.cluster.local
+Server:		172.30.0.10
+Address:	172.30.0.10:53
+
+
+Name:	prometheus-k8s.openshift-monitoring.svc.cluster.local
+Address: 172.30.31.13
+
+/usr/share/grafana $ 
+```
+
+
+
+### Understanding /etc/resolv.conf
+The `/etc/resolv.conf` file configures DNS resolution inside the container. 
+
+```
+/usr/share/grafana $ cat /etc/resolv.conf 
+search dittybopper.svc.cluster.local svc.cluster.local cluster.local mno.example.com
+nameserver 172.30.0.10
+options ndots:5
+```
+
+**How to interpret this file:**
+
+- **`search`**: DNS search domains. When resolving a hostname, the system tries appending each domain in order:
+  - `prometheus-k8s` → tries `prometheus-k8s.dittybopper.svc.cluster.local` first
+  - If not found → tries `prometheus-k8s.svc.cluster.local`
+  - If not found → tries `prometheus-k8s.cluster.local`
+  - If not found → tries `prometheus-k8s.mno.example.com`
+  
+- **`nameserver 172.30.0.10`**: The DNS server IP (CoreDNS/kube-dns). All DNS queries go to this address.
+
+- **`options ndots:5`**: If a hostname has 5 or more dots (`.`), it's treated as a FQDN and searched directly. Otherwise, search domains are appended first.
+  - `prometheus-k8s.openshift-monitoring.svc.cluster.local` (3 dots) → treated as relative, search domains appended first
+  - `prometheus-k8s.openshift-monitoring.svc.cluster.local.` (4 dots + trailing dot) → treated as absolute FQDN, no search domains
+
+**For the Prometheus connection issue:**
+- When Grafana queries `prometheus-k8s.openshift-monitoring.svc.cluster.local`, it's already a FQDN
+- DNS query goes directly to `172.30.0.10` (CoreDNS)
+- If CoreDNS can't resolve it, you get "no such host" error
+### Request Flow: Browser to Container
+
+When a user queries a Grafana dashboard from a browser, the request traverses multiple layers before reaching the Prometheus backend. Understanding this complete flow helps identify where failures occur. The following diagram shows the end-to-end request path:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    Complete Request Flow                                 │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────┐
+│   Browser       │
+│   (User)        │
+└─────────────────┘
+    │
+    │ HTTP/HTTPS Request
+    │ GET /api/datasources/proxy/uid/.../api/v1/status/buildinfo
+    │ Host: dittybopper-dittybopper.apps.mno.example.com
+    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│   OpenShift Route                                                       │
+│   - Route Name: dittybopper                                             │
+│   - Host: dittybopper-dittybopper.apps.mno.example.com                  │
+│   - Backend Service: dittybopper                                        │
+│   - Backend Port: 3000                                                  │
+│   - Termination: None (HTTP)                                            │
+└─────────────────────────────────────────────────────────────────────────┘
+    │
+    │ Internal Cluster Request
+    │ Route → Service ClusterIP: 172.30.245.102:3000
+    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│   Grafana Service                                                       │
+│   - Service Name: dittybopper (in dittybopper namespace)               │
+│   - ClusterIP: 172.30.245.102                                           │
+│   - Type: ClusterIP                                                     │
+│   - Port: 3000/TCP                                                      │
+│   - Selector: app=dittybopper                                           │
+│   - Endpoints: 10.128.3.187:3000                                        │
+└─────────────────────────────────────────────────────────────────────────┘
+    │
+    │ Pod-to-Pod Communication
+    │ (OVN-Kubernetes CNI)
+    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│   Grafana Pod (dittybopper-79954578d9-44zs7)                           │
+│   - Pod IP: 10.128.3.187                                                │
+│                                                                         │
+│   ┌─────────────────────────────────────────────────────────────┐     │
+│   │  Container: dittybopper (Grafana)                           │     │
+│   │  - Port: 3000                                               │     │
+│   │  - Image: quay.io/cloud-bulldozer/grafana:9.4.3            │     │
+│   │                                                             │     │
+│   │  Grafana Backend Processing:                                │     │
+│   │  1. Receives API request from browser                       │     │
+│   │  2. Reads datasource config from ConfigMap                  │     │
+│   │  3. Constructs Prometheus query                             │     │
+│   │  4. Initiates outbound connection to Prometheus             │     │
+│   └─────────────────────────────────────────────────────────────┘     │
+│                                                                         │
+│   ┌─────────────────────────────────────────────────────────────┐     │
+│   │  Container: dittybopper-syncer                              │     │
+│   │  - Image: quay.io/cloud-bulldozer/dittybopper-syncer:latest│     │
+│   │  - Syncs dashboards to Grafana (not involved in Prometheus) │     │
+│   └─────────────────────────────────────────────────────────────┘     │
+└─────────────────────────────────────────────────────────────────────────┘
+    │
+    │ Outbound HTTP/HTTPS Request
+    │ GET https://prometheus-k8s.openshift-monitoring.svc.cluster.local:9091/api/v1/query
+    │
+    │ ⚠️  DNS Resolution Step (Critical Failure Point)
+    │    - Service FQDN: prometheus-k8s.openshift-monitoring.svc.cluster.local
+    │    - DNS Query to CoreDNS/kube-dns
+    │    - Expected: Resolve to Service ClusterIP
+    │    - Error: "no such host" → DNS resolution failure
+    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│   CoreDNS / kube-dns                                                    │
+│   - Resolves: prometheus-k8s.openshift-monitoring.svc.cluster.local     │
+│   - Returns: Service ClusterIP (if service exists)                    │
+│   - Status: ❌ FAILURE (service not found or DNS misconfiguration)     │
+└─────────────────────────────────────────────────────────────────────────┘
+    │
+    │ (If DNS resolution succeeds)
+    │ Service ClusterIP → Endpoints
+    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│   Prometheus Service                                                    │
+│   - Service Name: prometheus-k8s                                        │
+│   - Namespace: openshift-monitoring                                     │
+│   - Port: 9091 (or 9090)                                               │
+│   - Endpoints: [Prometheus pod IPs]                                    │
+└─────────────────────────────────────────────────────────────────────────┘
+    │
+    │ Pod-to-Pod Communication
+    │ (OVN-Kubernetes CNI)
+    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│   Prometheus Pod                                                        │
+│   - Namespace: openshift-monitoring                                     │
+│   - Receives PromQL query                                               │
+│   - Returns metrics data                                                │
+└─────────────────────────────────────────────────────────────────────────┘
+    │
+    │ Response flows back through the same path
+    ▼
+┌─────────────────┐
+│   Browser       │
+│   (JSON Response)│
+└─────────────────┘
+```
+
+### Request Flow Breakdown:
+
+1. **Browser → Route**:
+   - User accesses Grafana UI via external URL: `dittybopper-dittybopper.apps.mno.example.com`
+   - Route `dittybopper` forwards to service `dittybopper` on port 3000
+   - Route termination: None (HTTP only)
+   - **Error observed**: 502 Bad Gateway suggests Route → Service connection issue
+
+2. **Route → Grafana Service**:
+   - Route forwards request to `dittybopper` service (ClusterIP: `172.30.245.102:3000`)
+   - Service type: ClusterIP (internal cluster access only)
+   - Service selects pods with label `app=dittybopper`
+   - Load balances to available pod endpoints (currently: `10.128.3.187:3000`)
+   - **Note**: There's also a `renderer` service (ClusterIP: `172.30.15.195:8081`) for dashboard rendering, but it's not part of the main request flow
+
+3. **Grafana Service → Grafana Pod**:
+   - Request reaches `dittybopper` container on port 3000
+   - Grafana backend processes the API request
+   - Reads datasource configuration from mounted ConfigMap
+   - **Note**: The `dittybopper-syncer` container runs in the same pod but is not involved in this request flow
+
+4. **Grafana Pod → DNS Resolution** (⚠️ **Failure Point**):
+   - Grafana attempts to resolve: `prometheus-k8s.openshift-monitoring.svc.cluster.local`
+   - DNS query sent to CoreDNS/kube-dns
+   - **Error**: `dial tcp: lookup prometheus-k8s.openshift-monitoring.svc.cluster.local: no such host`
+   - This indicates either:
+     - Service doesn't exist in `openshift-monitoring` namespace
+     - DNS resolution is failing
+     - Network policy blocking DNS queries
+
+5. **DNS → Prometheus Service** (if resolution succeeds):
+   - CoreDNS returns Service ClusterIP
+   - Service routes to Prometheus pod endpoints
+
+6. **Prometheus Service → Prometheus Pod**:
+   - Request reaches Prometheus pod
+   - Prometheus executes PromQL query
+   - Returns metrics data
+
+### Key Observations from Error Messages:
+
+- **Error 1**: `no such host` for `prometheus-k8s.openshift-monitoring.svc.cluster.local`
+  - Indicates DNS resolution failure
+  - Service may not exist or be misconfigured
+
+- **Error 2**: `502 Bad Gateway` from browser
+  - Grafana backend cannot reach Prometheus
+  - Proxy request fails due to upstream connection failure
+
+- **Error 3**: `400 Bad Request` on `/api/ds/query`
+  - Grafana frontend receives error from backend
+  - Backend unable to complete query due to datasource connection failure
+
+### packet capturing in grafana pod
+
+
+
