@@ -137,4 +137,8 @@ So basically, if a hostname has less than equal 5 dots, it will append those sea
 20:45:55.760768 eth0  In  IP 172.30.0.10.domain > 10.131.0.45.42711: 6168 0/0/0 (87)
 20:45:55.760897 eth0  In  IP 172.30.0.10.domain > 10.131.0.45.42711: 7309 0/0/0 (87)
 ```
-As a result, the original hostname DNS query were never sent out. We suspect it might has to do with the upstream DNS resolver.
+As a result, the original hostname DNS query were never sent out.We current have two workarounds:
+- change the ndots to be less than or equal 4, so the promethues db URL will be treated as a full FQDN without appening those search domains, which also puts less load on the dnsserver.
+- When deloying dittyboper pods, instead of using the full promethues API URL, we could just use the service name and take advantage of the resolve.conf to append the search domains.
+
+The root cause of this is still unclear, we suspect it might has to do with the upstream DNS resolver. More debugging need to be continued.. 
