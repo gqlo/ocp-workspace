@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script to create DataVolume, VolumeSnapshot, and VirtualMachine resources
-# Usage: ./create_vm.sh <number_of_vms> <number_of_namespaces>
+# Usage: ./create_vm.sh <options> [<total-VMs> [<namespaces>]]
 # cursor assisted script
 
 set -eu
@@ -15,6 +15,7 @@ BASE_PVC_NAME="rhel9-base"
 VM_BASENAME="rhel9"
 VM_CPU_CORES="1"
 VM_MEMORY="1Gi"
+# Default to using scripts in the directory in which this script resides.
 # $0 is the script name, %/* removes everything after the /, so we get the directory name
 CREATE_VM_PATH=${CREATE_VM_PATH:-.:${0%/*}}
 VM_CPU_REQUEST=
@@ -27,10 +28,13 @@ WAIT=0
 RECREATE_EXISTING_VMS=1
 yamlpath=()
 declare -A expected_vms=()
+# If CREATE_VM_PATH is explicitly provided, search for
+# YAML files on that path.
 # Split the CREATE_VM_PATH into an array using : as the delimiter
 IFS=: read -r -a yamlpath <<< "$CREATE_VM_PATH"
 
 doit=1
+quiet=0
 
 fatal() {
     echo "$*"
@@ -43,7 +47,9 @@ help() {
     cat <<EOF
 Usage: $0 [options] [number_of_vms (default $NUM_VMS) [number_of_namespaces (default $NUM_NAMESPACES)]]
     options:
-        -n                      Show what commands would be run without running them
+        -n                      Show what commands would be run
+                                without running them
+        -q                      Only list objects to be created
         --dv-url=URL            Origin of DV ($DV_URL)
         --storage-size=N        Storage size ($STORAGE_SIZE)
         --snapshot-class=class  Snapshot class ($SNAPSHOT_CLASS)
@@ -65,10 +71,14 @@ Usage: $0 [options] [number_of_vms (default $NUM_VMS) [number_of_namespaces (def
                                 (equivalent to --run-strategy=Always)
         --stop                  Do not start the VMs
                                 (equivalent to --run-strategy=Halted)
+    Specify either --vms (total VMs) or --vms-per-namespace.
+    --vms-per-namespace takes precedence.
 EOF
     exit 1
 }
 
+# Process long options.  Handle options names case-insensitive
+# and allow either -, _, or neither in names.
 process_option() {
     local optstr=${1:-}
     local option=
@@ -76,25 +86,26 @@ process_option() {
     IFS=$'=' read -r option value <<< "$optstr"
     # Normalize the option name to use - instead of _
     option=${option//_/-}
+    option=${option//-/}
     # Convert the option to lowercase for case-insensitive matching
     case "${option,,}" in
-	dv-url)    DV_URL=$value ;;
+	dvurl)     DV_URL=$value ;;
 	storage*)  STORAGE_SIZE=$value ;;
 	snapshot*) SNAPSHOT_CLASS=$value ;;
 	pvc*)      BASE_PVC_NAME=$value ;;
 	base*)	   VM_BASENAME=$value ;;
 	core*)	   VM_CPU_CORES=$value ;;
 	mem*)	   VM_MEMORY=$value ;;
-	request-m*)VM_MEMORY_REQUEST=$value ;;
-	request-c*)VM_CPU_REQUEST=$value ;;
-	vms-per*)  NUM_VMS_PER_NAMESPACE=$value ;;
+	requestm*) VM_MEMORY_REQUEST=$value ;;
+	requestc*) VM_CPU_REQUEST=$value ;;
+	vmsper*)   NUM_VMS_PER_NAMESPACE=$value ;;
 	vms*)	   NUM_VMS=$value ;;
 	namesp*)   NUM_NAMESPACES=$value ;;
-	run-strat*)RUN_STRATEGY=$value ;;
+	runstrat*) RUN_STRATEGY=$value ;;
 	wait)	   WAIT=1 ;;
 	nowait)	   WAIT=0 ;;
-	create_ex*)RECREATE_EXISTING_VMS=1 ;;
-	no-create*)RECREATE_EXISTING_VMS=0 ;;
+	createex*) RECREATE_EXISTING_VMS=1 ;;
+	nocreate*) RECREATE_EXISTING_VMS=0 ;;
 	start)     RUN_STRATEGY=Always ;;
 	stop)      RUN_STRATEGY=Halted ;;
 	*) 	   help ;;
@@ -102,9 +113,10 @@ process_option() {
 }
 
 # process all the options one by one, - is treated as the option"-"
-while getopts 'nh-:' opt "$@" ; do
+while getopts 'nqh-:' opt "$@" ; do
     case "$opt" in
 	n) doit=0		    ;;
+	q) quiet=1; doit=0	    ;;
 	h) help			    ;;
 	-) process_option "$OPTARG" ;;
 	*) help	                    ;;
@@ -119,7 +131,12 @@ if (($# > 2)) ; then
     help
 fi
 
+# Check for prerequisites.
 if ((doit)) ; then
+    if [[ -z "$(type -t oc)" ]] ; then
+	fatal "Error: oc command is not installed on system"
+    fi
+
     if ! oc get ns openshift-cnv >/dev/null 2>&1 ; then
 	fatal "Error: openshift-cnv is not installed"
     fi
@@ -136,6 +153,8 @@ fi
 NUM_VMS=${1:-$NUM_VMS}
 NUM_NAMESPACES=${2:-$NUM_NAMESPACES}
 
+# If user specified --vms-per-namespace, calculate the total number of
+# VMs from that.
 if [[ -n "$NUM_VMS_PER_NAMESPACE" ]] ; then
     NUM_VMS=$((NUM_VMS_PER_NAMESPACE * NUM_NAMESPACES))
 fi
@@ -200,6 +219,10 @@ LOG_DIR="logs"
 LOG_FILE="${LOG_DIR}/$(date +%Y-%m-%dT%H:%M:%S).log"
 
 # Function to log with timestamp
+# Output may be provided on command line; if not, it is
+# read line by line from stdin with timestamp prepended.
+# Only timestamp if we're doing something; if it's a dry
+# run, the timestamp won't be interesting.
 _log_message() {
     # avoid conflicts with the global OPTIND variable
     local -i OPTIND=0
@@ -214,10 +237,18 @@ _log_message() {
     if ((from_stdin)) ; then
 	local line
 	while IFS= read -r line ; do
-	    printf "%(%Y-%m-%d %H:%M:%S)T %s\n" -1 "$line"
+	    if ((doit)) ; then
+		printf "%(%Y-%m-%d %H:%M:%S)T %s\n" -1 "$line"
+	    else
+		echo "$line"
+	    fi
 	done
     else
-	printf "%(%Y-%m-%d %H:%M:%S)T %s\n" -1 "$*"
+	if ((doit)) ; then
+	    printf "%(%Y-%m-%d %H:%M:%S)T %s\n" -1 "$*"
+	else
+	    echo "$*"
+	fi
     fi
 }
 
@@ -242,11 +273,15 @@ fi
 do_oc() {
     if ((doit)) ; then
 	oc apply -f -
+    elif ((quiet)) ; then
+	local line
+	while read -r line ; do : ; done
     else
 	cat
     fi
 }
 
+# Replace templated variables in YAML files with their values.
 function process_template() {
     local file=$1
     sed -e "s/{vm-ns}/$namespace/g" \
@@ -261,59 +296,6 @@ function process_template() {
         -e "s/{VM_MEMORY}/$VM_MEMORY/g" \
         -e "s/{RUN_STRATEGY}/$RUN_STRATEGY/g" \
         "$file"
-}
-
-# Function to create namespaces
-create_namespaces() {
-    log_message "Creating namespaces..."
-    local -i ns
-    local ns_file
-    ns_file=$(find_file_on_path "namespace.yaml") || fatal "Can't find namespace.yaml on CREATE_VM_PATH"
-    local -A existing_namespaces=()
-    if ((doit)) ; then
-	local namespace
-	while read -r namespace ; do
-	    [[ -z "$namespace" ]] || existing_namespaces["$namespace"]=1
-	done <<< "$(oc get namespace --no-headers 2>/dev/null | awk '{print $1}')"
-    fi
-    for ((ns=1; ns<=NUM_NAMESPACES; ns++)); do
-        namespace="vm-ns-${ns}"
-
-        # Check if namespace already exists
-	if [[ -n "${existing_namespaces[$namespace]:-}" ]] ; then
-            log_message "Namespace $namespace already exists, skipping creation"
-        else
-            log_message "Creating namespace: $namespace"
-            process_template "$ns_file" | do_oc
-        fi
-    done
-}
-
-# Function to create VolumeSnapshots
-create_volumesnapshots() {
-    log_message "Creating VolumeSnapshots..."
-    local -i ns
-    local vs_file
-    vs_file=$(find_file_on_path "volumesnap.yaml") || fatal "Can't find volumesnap.yaml on CREATE_VM_PATH"
-    for ((ns=1; ns<=NUM_NAMESPACES; ns++)); do
-        namespace="vm-ns-${ns}"
-        log_message "Creating VolumeSnapshot for namespace: $namespace"
-        process_template "$vs_file" | do_oc
-    done
-}
-
-# Function to create DataVolumes
-create_datavolumes() {
-    log_message "Creating DataVolumes..."
-    local -i ns
-    local dv_file
-    dv_file=$(find_file_on_path "dv.yaml") || fatal "Can't find dv.yaml on CREATE_VM_PATH"
-    for ((ns=1; ns<=NUM_NAMESPACES; ns++)); do
-        namespace="vm-ns-${ns}"
-
-        log_message "Creating DataVolume for namespace: $namespace"
-        process_template "$dv_file" | do_oc
-    done
 }
 
 # Indent replacement text based on indentation of
@@ -338,59 +320,35 @@ indent_token() {
     done
 }
 
-# Function to create VirtualMachines
-create_virtualmachines() {
-    log_message "Creating VirtualMachines..."
-    VM_ID=1
-    local vm_file
-    vm_file=$(find_file_on_path "vm-snap.yaml") || fatal "Can't find vm-snap.yaml on CREATE_VM_PATH"
-    local requeststr=
-    local -A requests=()
-    if [[ -n "${VM_CPU_REQUEST:-}" ]] ; then
-	requests[cpu]=$VM_CPU_REQUEST
-    fi
-    if [[ -n "${VM_MEMORY_REQUEST:-}" ]] ; then
-	requests[memory]=$VM_MEMORY_REQUEST
-    fi
-    if [[ -n "${requests[*]}" ]] ; then
-	requeststr="
-resources:
-  requests:
-$(local resource; for resource in "${!requests[@]}" ; do echo "    $resource: ${requests[$resource]}" ; done)
-"
-    fi
-    local -A existing_vms=()
-    if ((! RECREATE_EXISTING_VMS)) ; then
-	local vm
-	while read -r vm ; do
-	    if [[ -n "$vm" ]] ; then
-		existing_vms["$vm"]=1
-	    fi
-	done <<< "$(oc get vm -A --no-headers | awk '{printf "%s/%s\n", $1, $2}')"
+################################################################
+# Function to create namespaces
+create_namespaces() {
+    log_message "Creating namespaces..."
+    local -i ns
+    local ns_file
+    ns_file=$(find_file_on_path "namespace.yaml") || fatal "Can't find namespace.yaml on CREATE_VM_PATH"
+    local -A existing_namespaces=()
+    if ((doit)) ; then
+	local namespace
+	while read -r namespace ; do
+	    if [[ -n "$namespace" ]] ; then existing_namespaces["$namespace"]=1; fi
+	done <<< "$(oc get namespace --no-headers 2>/dev/null | awk '{print $1}')"
     fi
     for ((ns=1; ns<=NUM_NAMESPACES; ns++)); do
         namespace="vm-ns-${ns}"
 
-        # Calculate VMs for this namespace
-        vms_in_this_namespace=$VMS_PER_NAMESPACE
-        if [[ $ns -le $REMAINDER_VMS ]]; then
-            vms_in_this_namespace=$((vms_in_this_namespace + 1))
+        # Check if namespace already exists
+	if [[ -n "${existing_namespaces[$namespace]:-}" ]] ; then
+            log_message "Namespace $namespace already exists, skipping creation"
+        else
+            log_message "Creating namespace: $namespace"
+            process_template "$ns_file" | do_oc
         fi
-
-        # Create VMs for this namespace
-        for ((vm=1; vm<=vms_in_this_namespace; vm++)); do
-	    local vm_name="${namespace}/${VM_BASENAME}-${VM_ID}"
-	    if [[ -z "${existing_vms[$vm_name]:-}" ]] ; then
-		log_message "Creating VirtualMachine $VM_ID for namespace: $namespace"
-		process_template "$vm_file" | indent_token RESOURCES "$requeststr" | do_oc || fatal "Cannot create vm $vm_name!"
-	    fi
-	    expected_vms["$vm_name"]=1
-            VM_ID=$((VM_ID + 1))
-        done
     done
 }
 
-# Function to check if DataVolume is completed
+################################################################
+# DataVolumes
 check_datavolume_status() {
     local namespace=$1
     local datavolume_name="${VM_BASENAME}-base"
@@ -408,8 +366,7 @@ check_datavolume_status() {
                 return 0
                 ;;
             "Failed")
-                log_message "Error: DataVolume $datavolume_name in namespace $namespace failed"
-                return 1
+                fatal "Error: DataVolume $datavolume_name in namespace $namespace failed"
                 ;;
             "Pending"|"Running"|"ImportScheduled"|"ImportInProgress")
                 log_message "DataVolume $datavolume_name in namespace $namespace is still $status, waiting..."
@@ -425,10 +382,6 @@ check_datavolume_status() {
 
 # Function to wait for all DataVolumes to complete
 wait_for_all_datavolumes() {
-    if ((! doit)) ; then
-	log_message "Not waiting for datavolumes"
-	return
-    fi
     log_message "Waiting for all DataVolumes to complete..."
 
     local -i ns
@@ -443,7 +396,22 @@ wait_for_all_datavolumes() {
     log_message "All DataVolumes are completed successfully!"
 }
 
-# Function to check if VolumeSnapshot is ready
+create_datavolumes() {
+    log_message "Creating DataVolumes..."
+    local -i ns
+    local dv_file
+    dv_file=$(find_file_on_path "dv.yaml") || fatal "Can't find dv.yaml on CREATE_VM_PATH"
+    for ((ns=1; ns<=NUM_NAMESPACES; ns++)); do
+        namespace="vm-ns-${ns}"
+
+        log_message "Creating DataVolume for namespace: $namespace"
+        process_template "$dv_file" | do_oc
+    done
+    if ((doit)) ; then wait_for_all_datavolumes; fi
+}
+
+################################################################
+# VolumeSnapshots
 check_volumesnapshot_status() {
     local namespace=$1
     local snapshot_name="${VM_BASENAME}-${namespace}"
@@ -455,22 +423,21 @@ check_volumesnapshot_status() {
 	local status
         status=$(oc get volumesnapshot "$snapshot_name" -n "$namespace" -o jsonpath='{.status.readyToUse}' 2>/dev/null || echo "false")
 
-        if [[ "$status" = "true" ]]; then
-            log_message "VolumeSnapshot $snapshot_name in namespace $namespace is ready"
-            return 0
-        else
-            log_message "VolumeSnapshot $snapshot_name in namespace $namespace is not ready yet, waiting..."
-            sleep 10
-        fi
+	case "$status" in
+	    "true")
+		log_message "VolumeSnapshot $snapshot_name in namespace $namespace is ready"
+		return 0
+		;;
+	    *)
+		log_message "VolumeSnapshot $snapshot_name in namespace $namespace is not ready yet, waiting..."
+		sleep 10
+		;;
+	esac
     done
 }
 
 # Function to wait for all VolumeSnapshots to be ready
 wait_for_all_volumesnapshots() {
-    if ((! doit)) ; then
-	log_message "Not waiting for volumesnapshots"
-	return
-    fi
     log_message "Waiting for all VolumeSnapshots to be ready..."
 
     local -i ns
@@ -485,11 +452,22 @@ wait_for_all_volumesnapshots() {
     log_message "All VolumeSnapshots are ready successfully!"
 }
 
+create_volumesnapshots() {
+    log_message "Creating VolumeSnapshots..."
+    local -i ns
+    local vs_file
+    vs_file=$(find_file_on_path "volumesnap.yaml") || fatal "Can't find volumesnap.yaml on CREATE_VM_PATH"
+    for ((ns=1; ns<=NUM_NAMESPACES; ns++)); do
+        namespace="vm-ns-${ns}"
+        log_message "Creating VolumeSnapshot for namespace: $namespace"
+        process_template "$vs_file" | do_oc
+    done
+    if ((doit)) ; then wait_for_all_datavolumes; fi
+}
+
+################################################################
+# VMs
 wait_for_all_vms() {
-    if ((! doit || ! WAIT)) ; then
-	log_message "Not waiting for all VMs"
-	return
-    fi
     log_message "Waiting for all VMs to be ready"
     local -i total_vms="${#expected_vms[@]}"
     local -i ready_vms=0
@@ -515,6 +493,60 @@ wait_for_all_vms() {
     done
 }
 
+create_virtualmachines() {
+    log_message "Creating VirtualMachines..."
+    VM_ID=1
+    local vm_file
+    vm_file=$(find_file_on_path "vm-snap.yaml") || fatal "Can't find vm-snap.yaml on CREATE_VM_PATH"
+    local requeststr=
+    local -A requests=()
+    if [[ -n "${VM_CPU_REQUEST:-}" ]] ; then requests[cpu]=$VM_CPU_REQUEST; fi
+    if [[ -n "${VM_MEMORY_REQUEST:-}" ]] ; then requests[memory]=$VM_MEMORY_REQUEST; fi
+    if [[ -n "${requests[*]}" ]] ; then
+	requeststr="
+resources:
+  requests:
+$(local resource; for resource in "${!requests[@]}" ; do echo "    $resource: ${requests[$resource]}" ; done)
+"
+    fi
+    local -A existing_vms=()
+    if ((! RECREATE_EXISTING_VMS)) ; then
+	local vm
+	while read -r vm ; do
+	    if [[ -n "$vm" ]] ; then existing_vms["$vm"]=1; fi
+	done <<< "$(oc get vm -A --no-headers | awk '{printf "%s/%s\n", $1, $2}')"
+    fi
+    for ((ns=1; ns<=NUM_NAMESPACES; ns++)); do
+        namespace="vm-ns-${ns}"
+
+        # Calculate VMs for this namespace
+        vms_in_this_namespace=$VMS_PER_NAMESPACE
+        if [[ $ns -le $REMAINDER_VMS ]]; then
+            vms_in_this_namespace=$((vms_in_this_namespace + 1))
+        fi
+
+        # Create VMs for this namespace
+        for ((vm=1; vm<=vms_in_this_namespace; vm++)); do
+	    local vm_name="${namespace}/${VM_BASENAME}-${VM_ID}"
+	    if [[ -z "${existing_vms[$vm_name]:-}" ]] ; then
+		log_message "Creating VirtualMachine $VM_ID for namespace: $namespace"
+		process_template "$vm_file" | indent_token RESOURCES "$requeststr" | do_oc ||
+		    fatal "Cannot create vm $vm_name!"
+	    fi
+	    expected_vms["$vm_name"]=1
+            VM_ID=$((VM_ID + 1))
+        done
+    done
+    if ((doit)) ; then
+	if ((WAIT)) ; then
+	    wait_for_all_vms
+	else
+	    log_message "Not waiting for all VMs"
+	fi
+    fi
+}
+
+################################################################
 # Main execution
 main() {
     log_message "Starting resource creation process..."
@@ -529,15 +561,12 @@ main() {
 
     create_namespaces
     create_datavolumes
-    wait_for_all_datavolumes
     create_volumesnapshots
-    wait_for_all_volumesnapshots
     create_virtualmachines
-    wait_for_all_vms
 
     if ((doit)) ; then
 	log_message "Resource creation completed successfully!"
-	log_message "Created $NUM_NAMESPACES namespaces, $NUM_NAMESPACES DataVolumes, $NUM_NAMESPACES VolumeSnapshots, and $NUM_VMS VirtualMachines"
+	log_message "Created $NUM_NAMESPACES namespaces, $NUM_NAMESPACES DataVolumes, $NUM_NAMESPACES VolumeSnapshots, and $NUM_VMS total VirtualMachines"
 	echo ""
 	echo "To check the created resources:"
 	echo "  oc get namespaces | grep vm-ns"
